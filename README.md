@@ -87,8 +87,8 @@ GND         ---> Negative (-)
 ### Setup Instructions
 1. **Clone the repository**:
    ```bash
-   git clone <repository-url>
-   cd flock-you
+   git clone https://github.com/ltrademark/flock-you--for-T-Dongle-C5
+   cd flock-you--for-T-Dongle-C5
    ```
 
 2. **Connect your Oui-Spy device** via USB-C
