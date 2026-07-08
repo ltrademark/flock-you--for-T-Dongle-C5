@@ -52,6 +52,28 @@ GPIO3 (D2)  ---> Positive (+)
 GND         ---> Negative (-)
 ```
 
+### Option 3: LilyGO T-Dongle S3
+- **Microcontroller**: ESP32-S3 (USB-A dongle form factor)
+- **Display**: 0.96" ST7735 80x160 TFT (on-screen scan status + detection alerts)
+- **Alert**: On-board APA102 RGB LED (police-style red/blue strobe — replaces the buzzer)
+- No external wiring required.
+
+### Option 4: LilyGO T-Dongle C5
+- **Microcontroller**: ESP32-C5 — single-core RISC-V, **dual-band 2.4 GHz + 5 GHz Wi-Fi 6**, BLE 5
+- **Display**: 0.96" ST7735 80x160 TFT (same panel as the S3 dongle)
+- **Alert**: On-board APA102 RGB LED (red/blue strobe)
+- **USB**: Native USB Serial/JTAG (no UART bridge chip)
+- No external wiring required.
+
+> The T-Dongle C5 is the newest target. Because the ESP32-C5 is not yet supported by
+> the upstream PlatformIO Espressif platform, its build environment uses the community
+> [pioarduino](https://github.com/pioarduino/platform-espressif32) fork (Arduino-ESP32 3.x /
+> ESP-IDF 5.x) and a NimBLE 2.x-compatible BLE path. The board definition and the APA102 LED
+> driver are vendored in this repo (`boards/Lilygo-T-Dongle-C5.json`, `lib/APA102/`), so no
+> extra setup is needed. Optional 5 GHz channel hopping is available behind the
+> `ENABLE_5GHZ_SCAN` build flag (see `platformio.ini`); it is off by default because 5 GHz
+> promiscuous capture on the C5 core is still experimental.
+
 ## Installation
 
 ### Prerequisites
@@ -73,6 +95,18 @@ GND         ---> Negative (-)
    ```bash
    pio run --target upload
    ```
+
+   To flash a specific board, pass its environment with `-e`:
+   ```bash
+   pio run -e t_dongle_c5 --target upload   # LilyGO T-Dongle C5
+   pio run -e t_dongle_s3 --target upload   # LilyGO T-Dongle S3
+   pio run -e xiao_esp32s3 --target upload  # Xiao ESP32-S3
+   ```
+
+   **T-Dongle C5 note:** the C5 flashes over its native USB Serial/JTAG interface via
+   `esptool --chip esp32c5`. The first build downloads the pioarduino toolchain, which takes
+   a few minutes. If the board is not auto-detected into download mode, hold the **BOOT**
+   button (GPIO 28) while plugging it in, then run the upload again.
 
 4. **Set up the web interface**:
    ```bash
