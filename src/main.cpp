@@ -11,10 +11,18 @@
 #include "esp_wifi.h"
 #include "esp_wifi_types.h"
 
-// T-Dongle S3 specific includes
-#ifdef BOARD_T_DONGLE_S3
+// Both LilyGO dongles (S3 and C5) carry a TFT display + APA102 RGB LED and no
+// buzzer, so they share the same UI code path.
+#if defined(BOARD_T_DONGLE_S3) || defined(BOARD_T_DONGLE_C5)
+#define BOARD_HAS_UI 1
 #include "display.h"
 #include "rgb_led.h"
+#endif
+
+// T-Dongle C5 has an SD card slot (shared SPI bus with the LCD) used for
+// standalone detection logging.
+#ifdef BOARD_T_DONGLE_C5
+#include "sd_log.h"
 #endif
 
 // ============================================================================
@@ -22,7 +30,9 @@
 // ============================================================================
 
 // Hardware Configuration
-#ifdef BOARD_T_DONGLE_S3
+#if defined(BOARD_T_DONGLE_C5)
+#define DEVICE_NAME "T-Dongle C5"
+#elif defined(BOARD_T_DONGLE_S3)
 #define DEVICE_NAME "T-Dongle S3"
 #else
 #define BUZZER_PIN 3  // GPIO3 (D2) - PWM capable pin on Xiao ESP32 S3
@@ -42,10 +52,37 @@
 #define MAX_CHANNEL 13
 #define CHANNEL_HOP_INTERVAL 500  // milliseconds
 
+// Channels to sweep in promiscuous mode. The 2.4 GHz set (1-13) works on every
+// ESP32 variant. The ESP32-C5 is dual-band, so when ENABLE_5GHZ_SCAN is defined
+// the common U-NII 5 GHz channels are appended. 5 GHz promiscuous capture on the
+// C5 core is still experimental, hence off by default.
+static const uint8_t hop_channels[] = {
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+#ifdef ENABLE_5GHZ_SCAN
+    36, 40, 44, 48, 149, 153, 157, 161, 165,
+#endif
+};
+#define NUM_HOP_CHANNELS (sizeof(hop_channels) / sizeof(hop_channels[0]))
+
 // BLE SCANNING CONFIGURATION
 #define BLE_SCAN_DURATION 1    // Seconds
 #define BLE_SCAN_INTERVAL 5000 // Milliseconds between scans
 static unsigned long last_ble_scan = 0;
+
+// NimBLE API compatibility.
+//   * The ESP32-C5 uses the Arduino 3.x / ESP-IDF 5.x core, which needs
+//     NimBLE-Arduino 2.x. In 2.x the scan-callback base class was renamed to
+//     NimBLEScanCallbacks, onResult() takes a const device pointer, and all
+//     scan durations are in milliseconds.
+//   * The S3 / Xiao envs stay on NimBLE 1.4.x (seconds, non-const pointer).
+// USE_NIMBLE_V2 is defined by the t_dongle_c5 build env.
+#ifdef USE_NIMBLE_V2
+typedef const NimBLEAdvertisedDevice* AdvDevicePtr;
+#define BLE_SCAN_TIME (BLE_SCAN_DURATION * 1000)  // milliseconds
+#else
+typedef NimBLEAdvertisedDevice* AdvDevicePtr;
+#define BLE_SCAN_TIME BLE_SCAN_DURATION           // seconds
+#endif
 
 // Detection Pattern Limits
 #define MAX_SSID_PATTERNS 10
@@ -152,7 +189,7 @@ static NimBLEScan* pBLEScan;
 // AUDIO SYSTEM
 // ============================================================================
 
-#ifndef BOARD_T_DONGLE_S3
+#ifndef BOARD_HAS_UI
 // Buzzer functions for Xiao boards
 void beep(int frequency, int duration_ms)
 {
@@ -164,7 +201,7 @@ void beep(int frequency, int duration_ms)
 void boot_beep_sequence()
 {
     printf("Initializing audio/visual system...\n");
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
     rgb_boot_sequence();
 #else
     printf("Playing boot sequence: Low -> High pitch\n");
@@ -177,7 +214,7 @@ void boot_beep_sequence()
 void flock_detected_beep_sequence()
 {
     printf("FLOCK SAFETY DEVICE DETECTED!\n");
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
     rgb_detection_flash();
 #else
     printf("Playing alert sequence: 3 fast high-pitch beeps\n");
@@ -197,7 +234,7 @@ void flock_detected_beep_sequence()
 void heartbeat_pulse()
 {
     printf("Heartbeat: Device still in range\n");
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
     rgb_heartbeat_pulse();
     display_heartbeat();
 #else
@@ -280,9 +317,13 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
     serializeJson(doc, json_output);
     Serial.println(json_output);
 
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
     // Update display with detection info
     display_detection("WiFi", ssid, mac_str, doc["threat_score"]);
+#endif
+#ifdef BOARD_T_DONGLE_C5
+    sd_log_enqueue("wifi", detection_type, ssid, mac_str, rssi, current_channel,
+                   doc["threat_score"].as<int>());
 #endif
 }
 
@@ -370,9 +411,13 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
     serializeJson(doc, json_output);
     Serial.println(json_output);
 
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
     // Update display with detection info
     display_detection("BLE", name && strlen(name) > 0 ? name : "Unknown", mac, doc["threat_score"]);
+#endif
+#ifdef BOARD_T_DONGLE_C5
+    sd_log_enqueue("ble", detection_method, name && strlen(name) > 0 ? name : "", mac,
+                   rssi, -1, doc["threat_score"].as<int>());
 #endif
 }
 
@@ -422,7 +467,7 @@ bool check_device_name_pattern(const char* name)
 // ============================================================================
 
 // Check if a BLE device advertises any Raven surveillance service UUIDs
-bool check_raven_service_uuid(NimBLEAdvertisedDevice* device, char* detected_service_out = nullptr)
+bool check_raven_service_uuid(AdvDevicePtr device, char* detected_service_out = nullptr)
 {
     if (!device) return false;
     
@@ -479,7 +524,7 @@ const char* get_raven_service_description(const char* uuid)
 }
 
 // Estimate firmware version based on detected service UUIDs
-const char* estimate_raven_firmware_version(NimBLEAdvertisedDevice* device)
+const char* estimate_raven_firmware_version(AdvDevicePtr device)
 {
     if (!device || !device->haveServiceUUID()) return "Unknown";
     
@@ -592,9 +637,14 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
 // BLE SCANNING
 // ============================================================================
 
+#ifdef USE_NIMBLE_V2
+class AdvertisedDeviceCallbacks: public NimBLEScanCallbacks {
+    void onResult(AdvDevicePtr advertisedDevice) override {
+#else
 class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
-    void onResult(NimBLEAdvertisedDevice* advertisedDevice) {
-        
+    void onResult(AdvDevicePtr advertisedDevice) {
+#endif
+
         NimBLEAddress addr = advertisedDevice->getAddress();
         std::string addrStr = addr.toString();
         uint8_t mac[6];
@@ -673,9 +723,14 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             serializeJson(doc, Serial);
             Serial.println();
 
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
             // Update display with Raven detection info
             display_detection("RAVEN", name.empty() ? "Gunshot Detector" : name.c_str(), addrStr.c_str(), 100);
+#endif
+#ifdef BOARD_T_DONGLE_C5
+            sd_log_enqueue("ble", "raven_service_uuid",
+                           name.empty() ? "Raven" : name.c_str(), addrStr.c_str(),
+                           rssi, -1, 100);
 #endif
 
             if (!triggered) {
@@ -695,12 +750,12 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
 
 void hop_channel()
 {
+    static uint8_t hop_index = 0;
     unsigned long now = millis();
     if (now - last_channel_hop > CHANNEL_HOP_INTERVAL) {
-        current_channel++;
-        if (current_channel > MAX_CHANNEL) {
-            current_channel = 1;
-        }
+        hop_index = (hop_index + 1) % NUM_HOP_CHANNELS;
+        current_channel = hop_channels[hop_index];
+        // Fails harmlessly (returns an error) if the band/channel is unsupported.
         esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
         last_channel_hop = now;
          printf("[WiFi] Hopped to channel %d\n", current_channel);
@@ -716,8 +771,13 @@ void setup()
     Serial.begin(115200);
     delay(1000);
 
-#ifdef BOARD_T_DONGLE_S3
-    // T-Dongle S3: Initialize display and RGB LED
+#ifdef BOARD_T_DONGLE_C5
+    // Create the shared LCD/SD SPI-bus mutex before anything touches the bus.
+    board_spi_init();
+#endif
+
+#ifdef BOARD_HAS_UI
+    // T-Dongle S3/C5: Initialize display and RGB LED
     display_init();
     rgb_init();
     display_boot_screen();
@@ -725,6 +785,11 @@ void setup()
     // Xiao: Initialize buzzer
     pinMode(BUZZER_PIN, OUTPUT);
     digitalWrite(BUZZER_PIN, LOW);
+#endif
+
+#ifdef BOARD_T_DONGLE_C5
+    // Mount SD (shares the display's SPI bus). Harmless no-op if no card.
+    sd_log_init();
 #endif
 
     boot_beep_sequence();
@@ -748,7 +813,11 @@ void setup()
     printf("Initializing BLE scanner...\n");
     NimBLEDevice::init("");
     pBLEScan = NimBLEDevice::getScan();
+#ifdef USE_NIMBLE_V2
+    pBLEScan->setScanCallbacks(new AdvertisedDeviceCallbacks());
+#else
     pBLEScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
+#endif
     pBLEScan->setActiveScan(true);
     pBLEScan->setInterval(100);
     pBLEScan->setWindow(99);
@@ -760,7 +829,7 @@ void setup()
 }
 
 // Track display update timing (T-Dongle S3 only)
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
 static unsigned long last_display_update = 0;
 #endif
 static bool ble_scanning = false;
@@ -785,7 +854,7 @@ void loop()
             printf("Device out of range - stopping heartbeat\n");
             device_in_range = false;
             triggered = false; // Allow new detections
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
             display_clear_detection();
             rgb_off();
 #endif
@@ -795,7 +864,7 @@ void loop()
     // BLE scanning
     if (millis() - last_ble_scan >= BLE_SCAN_INTERVAL && !pBLEScan->isScanning()) {
         printf("[BLE] scan...\n");
-        pBLEScan->start(BLE_SCAN_DURATION, false);
+        pBLEScan->start(BLE_SCAN_TIME, false);
         last_ble_scan = millis();
         ble_scanning = true;
     }
@@ -805,7 +874,7 @@ void loop()
         ble_scanning = false;
     }
 
-#ifdef BOARD_T_DONGLE_S3
+#ifdef BOARD_HAS_UI
     // Update display periodically (every 1 second when not in detection mode)
     if (!device_in_range && millis() - last_display_update >= 1000) {
         display_scanning(current_channel, ble_scanning);
@@ -815,6 +884,11 @@ void loop()
     // Update display and RGB LED animations
     display_update();
     rgb_update();
+#endif
+
+#ifdef BOARD_T_DONGLE_C5
+    // Write any queued detections to the SD card (single-context, shares SPI bus)
+    sd_log_flush();
 #endif
 
     delay(100);

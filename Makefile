@@ -1,4 +1,4 @@
-.PHONY: all clean xiao_esp32s3 xiao_esp32c3 esp32-s3-supermini factory help
+.PHONY: all clean xiao_esp32s3 xiao_esp32c3 esp32-s3-supermini t_dongle_s3 t_dongle_c5 factory help
 
 # Default target
 all: build factory
@@ -6,7 +6,7 @@ all: build factory
 # Build all environments
 build:
 	@echo "Building all environments..."
-	platformio run -e esp32-s3-supermini -e xiao_esp32c3 -e xiao_esp32s3 -e t_dongle_s3
+	platformio run -e esp32-s3-supermini -e xiao_esp32c3 -e xiao_esp32s3 -e t_dongle_s3 -e t_dongle_c5
 
 # Generate factory binaries and manifests
 factory:
@@ -36,6 +36,10 @@ t_dongle_s3:
 	@echo "Building t_dongle_s3..."
 	platformio run -e t_dongle_s3
 
+t_dongle_c5:
+	@echo "Building t_dongle_c5..."
+	platformio run -e t_dongle_c5
+
 # Help target
 help:
 	@echo "Available targets:"
@@ -47,3 +51,4 @@ help:
 	@echo "  make xiao_esp32c3     - Build only xiao_esp32c3"
 	@echo "  make esp32-s3-supermini - Build only esp32-s3-supermini"
 	@echo "  make t_dongle_s3      - Build only t_dongle_s3"
+	@echo "  make t_dongle_c5      - Build only t_dongle_c5"

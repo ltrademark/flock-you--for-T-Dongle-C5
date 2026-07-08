@@ -5,6 +5,11 @@
 // This file is only included when BOARD_T_DONGLE_S3 is defined
 
 #include <Arduino.h>
+#include <SPI.h>
+
+// Returns the SPI bus the display was initialized on, so peripherals that share
+// the bus (e.g. the T-Dongle C5's SD card slot) can reuse the same instance.
+SPIClass& display_spi();
 
 // Display states
 enum DisplayState {

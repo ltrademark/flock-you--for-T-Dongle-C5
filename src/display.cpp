@@ -1,5 +1,5 @@
-// Only compile for T-Dongle S3
-#ifdef BOARD_T_DONGLE_S3
+// Compile for either LilyGO dongle (both use the same 0.96" ST7735 80x160 panel)
+#if defined(BOARD_T_DONGLE_S3) || defined(BOARD_T_DONGLE_C5)
 
 #include "display.h"
 
@@ -7,6 +7,24 @@
 #include <Adafruit_ST7735.h>
 #include <SPI.h>
 
+#if defined(BOARD_T_DONGLE_C5)
+#define DEVICE_NAME "T-Dongle C5"
+
+// T-Dongle C5 display pins (from LilyGO include/pin_config.h).
+// The LCD shares this SPI bus with the SD card slot (SD CS=23), so the bus is
+// started with MISO=7 too — the LCD ignores it, but the SD card needs it to read.
+// Backlight is active LOW.
+#define TFT_CS     10
+#define TFT_RST    1
+#define TFT_DC     3
+#define TFT_MOSI   2
+#define TFT_MISO   7
+#define TFT_SCLK   6
+#define TFT_BL     0
+
+// The ESP32-C5 exposes a single general-purpose SPI peripheral as FSPI.
+static SPIClass tftSPI(FSPI);
+#else
 #define DEVICE_NAME "T-Dongle S3"
 
 // T-Dongle S3 Display pins
@@ -14,12 +32,30 @@
 #define TFT_RST    1
 #define TFT_DC     2
 #define TFT_MOSI   3
+#define TFT_MISO   -1
 #define TFT_SCLK   5
 #define TFT_BL     38
 
 // Use HSPI
-static SPIClass hspi(HSPI);
-static Adafruit_ST7735 tft = Adafruit_ST7735(&hspi, TFT_CS, TFT_DC, TFT_RST);
+static SPIClass tftSPI(HSPI);
+#endif
+
+static Adafruit_ST7735 tft = Adafruit_ST7735(&tftSPI, TFT_CS, TFT_DC, TFT_RST);
+
+// Expose the display's SPI bus so the SD-card logger can share it (C5).
+SPIClass& display_spi() { return tftSPI; }
+
+// The C5's LCD and SD card share one SPI bus, and detections can trigger LCD
+// writes from background WiFi/BLE tasks while the SD logger writes from loop().
+// A FreeRTOS mutex (created in board_spi_init(), see sd_log.cpp) serializes all
+// access. On the S3 the display owns its bus alone, so these are no-ops.
+#if defined(BOARD_T_DONGLE_C5)
+#include "sd_log.h"
+struct LcdLock  { LcdLock()  { board_spi_lock(); }  ~LcdLock() { board_spi_unlock(); } };
+#define LCD_GUARD() LcdLock _lcd_guard
+#else
+#define LCD_GUARD() do {} while (0)
+#endif
 
 // State tracking
 static DisplayState current_state = DISPLAY_BOOT;
@@ -49,8 +85,8 @@ void display_init() {
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, LOW);  // LOW = ON
 
-    // Initialize SPI for display
-    hspi.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+    // Initialize SPI for display (MISO is only needed so the shared SD card can read)
+    tftSPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
 
     // Initialize ST7735 display with correct variant
     tft.initR(INITR_MINI160x80_PLUGIN);
@@ -59,6 +95,7 @@ void display_init() {
 }
 
 void display_boot_screen() {
+    LCD_GUARD();
     current_state = DISPLAY_BOOT;
     tft.fillScreen(COLOR_BG);
 
@@ -91,6 +128,7 @@ void display_boot_screen() {
 }
 
 void display_scanning(uint8_t wifi_channel, bool ble_active) {
+    LCD_GUARD();
     if (current_state == DISPLAY_DETECTION) {
         return;  // Don't overwrite active detection
     }
@@ -142,6 +180,7 @@ void display_scanning(uint8_t wifi_channel, bool ble_active) {
 }
 
 void display_detection(const char* type, const char* name, const char* mac, int threat_score) {
+    LCD_GUARD();
     current_state = DISPLAY_DETECTION;
     flash_state = true;
 
@@ -191,6 +230,7 @@ void display_detection(const char* type, const char* name, const char* mac, int 
 }
 
 void display_heartbeat() {
+    LCD_GUARD();
     if (current_state != DISPLAY_DETECTION) {
         return;
     }
@@ -220,6 +260,7 @@ void display_clear_detection() {
 }
 
 void display_update() {
+    LCD_GUARD();
     // Periodic update for animations/refresh
     unsigned long now = millis();
 
@@ -241,4 +282,4 @@ void display_update() {
     }
 }
 
-#endif // BOARD_T_DONGLE_S3
+#endif // BOARD_T_DONGLE_S3 || BOARD_T_DONGLE_C5

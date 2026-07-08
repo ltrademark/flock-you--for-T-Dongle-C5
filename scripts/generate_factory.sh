@@ -13,7 +13,7 @@ mkdir -p firmware
 # Get platformio config to extract flash settings
 config_json=$(pio project config --json-output)
 
-for env in esp32-s3-supermini xiao_esp32c3 xiao_esp32s3 t_dongle_s3; do
+for env in esp32-s3-supermini xiao_esp32c3 xiao_esp32s3 t_dongle_s3 t_dongle_c5; do
   echo "Processing $env..."
   
   # Extract chip info from the compiled bootloader binary
