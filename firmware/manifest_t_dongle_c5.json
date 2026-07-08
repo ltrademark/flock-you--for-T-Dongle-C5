@@ -1,0 +1,16 @@
+{
+  "name": "Flock You - t_dongle_c5",
+  "version": "1.0.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-C5",
+      "parts": [
+        {
+          "path": "t_dongle_c5-factory.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}
